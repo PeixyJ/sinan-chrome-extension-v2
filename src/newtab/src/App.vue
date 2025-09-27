@@ -922,6 +922,18 @@ const isFaviconLoading = (url: string): boolean => {
   return loadingFavicons.value.has(url)
 }
 
+// 判断图标是否为base64格式
+// 判断是否为有效的图标（HTTP URL 或 base64）
+const isValidIcon = (icon: number | string): boolean => {
+  console.log('实际链接为：', icon)
+  if (typeof icon !== 'string') return false
+  // 检查是否为 HTTP/HTTPS URL
+  if (icon.startsWith('http://') || icon.startsWith('https://')) return true
+  // 检查是否为 base64 图片
+  if (icon.startsWith('data:image/')) return true
+  return false
+}
+
 // 检查图标是否已加载
 const isFaviconLoaded = (url: string): boolean => {
   return faviconCache.value.has(url)
@@ -1407,6 +1419,13 @@ watch(filteredBookmarks, () => {
               v-if="isFaviconLoading(bookmark.url) || !isFaviconLoaded(bookmark.url)" 
               class="w-8 h-8 rounded" 
               @vue:mounted="ensureFaviconLoading(bookmark.url)"
+            />
+            <img
+                v-if="isValidIcon(bookmark.icon)"
+                :src="String(bookmark.icon)"
+                :alt="bookmark.name"
+                class="h-full w-full object-cover"
+                @error="(e) => (e.target as HTMLImageElement).src = '/icon48.png'"
             />
             <img 
               v-else
