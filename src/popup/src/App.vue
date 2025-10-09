@@ -762,7 +762,7 @@ const previewBingImage = async () => {
 
 <template>
   <div :class="mode" class="min-h-full">
-    <div class="p-6 w-[360px] h-[600px] bg-background shadow-lg border border-border flex flex-col gap-6">
+    <div class="p-3 w-[360px] h-[600px] bg-background shadow-lg border border-border flex flex-col gap-6">
       <!-- 标题 -->
       <div class="text-lg text-primary flex items-center justify-between">
         <span>Sinan 书签管理</span>
@@ -791,7 +791,7 @@ const previewBingImage = async () => {
         </TabsList>
 
         <!-- 基础功能页面 -->
-        <TabsContent value="main" class="flex flex-col h-full space-y-4 overflow-y-auto">
+        <TabsContent value="main" class="p-3 flex flex-col h-full space-y-4 overflow-y-auto">
           <!-- 操作按钮 -->
           <div class="flex flex-col gap-4">
             <Button class="w-full" variant="default" @click="handleOpenSinan">打开Sinan主页</Button>
@@ -1007,7 +1007,7 @@ const previewBingImage = async () => {
         </TabsContent>
 
         <!-- 添加书签页面 -->
-        <TabsContent value="bookmark" class="space-y-4 overflow-y-auto">
+        <TabsContent value="bookmark" class="p-3 space-y-4 overflow-y-auto">
           <div class="space-y-3">
             <div>
               <label class="text-sm font-medium mb-1 block">网址</label>
@@ -1106,7 +1106,7 @@ const previewBingImage = async () => {
         </TabsContent>
 
         <!-- 系统配置页面 -->
-        <TabsContent value="settings" class="space-y-4 overflow-y-auto">
+        <TabsContent value="settings" class="p-3 space-y-4 overflow-y-auto">
           <!-- 表单区域 -->
           <div class="space-y-4">
             <!-- 服务地址 -->
