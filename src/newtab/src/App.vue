@@ -1083,45 +1083,51 @@ const handleKeydown = (event: KeyboardEvent) => {
   // 如果没有书签，不处理方向键
   if (currentBookmarks.length === 0) return
 
+  // 检查焦点是否在搜索框中
+  const activeElement = document.activeElement
+  const isSearchInputFocused = activeElement &&
+    (activeElement as HTMLElement).tagName === 'INPUT' &&
+    (activeElement as HTMLInputElement).placeholder?.includes('搜索书签')
+
   const maxRows = Math.ceil(currentBookmarks.length / gridLayout.value.columnsPerRow)
 
   switch (event.key) {
     case 'ArrowDown':
       event.preventDefault()
       isKeyboardNavigation.value = true
-      // 移除搜索框焦点
+      // 移除搜索框焦点，将焦点转移到书签矩阵
       if (document.activeElement && 'blur' in document.activeElement) {
         (document.activeElement as HTMLElement).blur()
       }
+
       if (selectedRow.value === -1) {
-        // 从搜索框按下方向键，选中第一行第一列
+        // 从搜索框进入书签矩阵，选中第一个书签（第一行第一列）
         selectedRow.value = 0
         selectedCol.value = 0
       } else {
-        // 向下移动到下一行
+        // 已在书签矩阵中，向下移动到下一行
         const nextRow = selectedRow.value + 1
         if (nextRow < maxRows) {
           selectedRow.value = nextRow
-          // 确保选中的列在当前行的范围内
+          // 确保选中的列在当前行的范围内，避免超出边界
           const maxColInRow = Math.min(gridLayout.value.columnsPerRow - 1,
                                       currentBookmarks.length - nextRow * gridLayout.value.columnsPerRow - 1)
           selectedCol.value = Math.min(selectedCol.value, maxColInRow)
         }
       }
-      scrollToSelectedBookmark()
+      scrollToSelectedBookmark() // 滚动到选中的书签位置
       break
 
     case 'ArrowUp':
       event.preventDefault()
       isKeyboardNavigation.value = true
       if (selectedRow.value > 0) {
-        // 移除搜索框焦点
+        // 已在书签矩阵中，向上移动到上一行
         if (document.activeElement && 'blur' in document.activeElement) {
           (document.activeElement as HTMLElement).blur()
         }
-        // 向上移动到上一行
         selectedRow.value = selectedRow.value - 1
-        // 确保选中的列在当前行的范围内
+        // 确保选中的列在当前行的范围内，避免超出边界
         const maxColInRow = Math.min(gridLayout.value.columnsPerRow - 1,
                                     currentBookmarks.length - selectedRow.value * gridLayout.value.columnsPerRow - 1)
         selectedCol.value = Math.min(selectedCol.value, maxColInRow)
@@ -1129,7 +1135,7 @@ const handleKeydown = (event: KeyboardEvent) => {
         // 从第一行向上，回到搜索框
         selectedRow.value = -1
         selectedCol.value = 0
-        // 聚焦到搜索框
+        // 聚焦到搜索框，方便用户重新输入搜索内容
         const searchInput = document.querySelector('input[placeholder*="搜索书签"]') as HTMLInputElement
         if (searchInput) {
           searchInput.focus()
@@ -1187,16 +1193,20 @@ const handleKeydown = (event: KeyboardEvent) => {
       break
 
     case 'Enter':
-      // 优先检查是否有书签被选中（焦点在书签矩阵中）
-      const currentIndex = selectedBookmarkIndex.value
-      if (selectedRow.value >= 0 && currentIndex >= 0 && currentIndex < currentBookmarks.length) {
-        // 如果焦点在书签矩阵中，回车键打开选中的书签
-        event.preventDefault()
-        openSelectedBookmark(true)
-      } else {
-        // 如果焦点不在书签矩阵中（在搜索框中），执行搜索逻辑
-        handleSearchEnter()
+      // 如果焦点在搜索框中，不处理回车键（让模板中的 @keydown.enter 处理）
+      if (isSearchInputFocused) {
+        return // 搜索框的回车事件由模板处理器处理
       }
+
+      // 判断当前焦点位置：selectedRow.value = -1 表示在搜索框，>= 0 表示在书签矩阵中
+      const currentIndex = selectedBookmarkIndex.value
+
+      if (selectedRow.value >= 0 && currentIndex >= 0 && currentIndex < currentBookmarks.length) {
+        // 用户已使用方向键选择了书签，回车打开选中的书签
+        event.preventDefault()
+        openSelectedBookmark(true) // 在当前标签页打开书签
+      }
+      // 注意：这里不再调用 handleSearchEnter()，因为只有在搜索框有焦点时才会执行搜索
       break
 
     case 'Escape':
@@ -1270,7 +1280,40 @@ const handleSearchEnter = async () => {
     return
   }
 
-  // 如果没有书签搜索结果，使用配置的默认搜索引擎搜索
+  // 如果没有书签搜索结果，使用 Chrome search API 进行搜索
+  try {
+    // 检查是否在 Chrome 扩展环境中并且 chrome.search API 可用
+    if (typeof chrome !== 'undefined' && chrome.search && chrome.search.query) {
+      console.log('使用 Chrome search API 搜索:', query)
+
+      // 使用 Chrome search API 进行搜索
+      chrome.search.query({
+        text: query,
+        disposition: 'NEW_TAB' // 在新标签页中打开搜索结果
+      }, (results: any) => {
+        if (chrome.runtime.lastError) {
+          console.error('Chrome search API 错误:', chrome.runtime.lastError)
+          // 如果 API 调用失败，回退到传统搜索引擎
+          fallbackToWebSearch(query)
+        } else {
+          console.log('Chrome search API 搜索结果:', results)
+          // API 调用成功，Chrome 会自动处理搜索结果页面的打开
+        }
+      })
+    } else {
+      console.log('Chrome search API 不可用，使用传统搜索引擎')
+      // 如果 Chrome search API 不可用，回退到传统搜索引擎
+      fallbackToWebSearch(query)
+    }
+  } catch (error) {
+    console.error('Chrome search API 调用失败:', error)
+    // 出错时回退到传统搜索引擎
+    fallbackToWebSearch(query)
+  }
+}
+
+// 回退到传统搜索引擎的函数
+const fallbackToWebSearch = async (query: string) => {
   try {
     const config = await StorageService.getConfig()
     const defaultEngine = config.defaultSearchEngine || 'baidu'
@@ -1280,19 +1323,19 @@ const handleSearchEnter = async () => {
 
     if (searchEngine && searchEngine.searchUrl) {
       const searchUrl = searchEngine.searchUrl.replace('{query}', encodeURIComponent(query))
-      console.log(`搜索框回车，使用${searchEngine.name}搜索:`, searchUrl)
+      console.log(`回退使用${searchEngine.name}搜索:`, searchUrl)
       window.location.href = searchUrl
     } else {
       // 如果找不到配置的搜索引擎，回退到百度
       const searchUrl = 'https://www.baidu.com/s?wd={query}'.replace('{query}', encodeURIComponent(query))
-      console.log('搜索框回车，回退到百度搜索:', searchUrl)
+      console.log('回退到百度搜索:', searchUrl)
       window.location.href = searchUrl
     }
   } catch (error) {
     console.error('获取默认搜索引擎配置失败:', error)
     // 出错时回退到百度
     const searchUrl = 'https://www.baidu.com/s?wd={query}'.replace('{query}', encodeURIComponent(query))
-    console.log('搜索框回车，出错回退到百度搜索:', searchUrl)
+    console.log('最终回退到百度搜索:', searchUrl)
     window.location.href = searchUrl
   }
 }
