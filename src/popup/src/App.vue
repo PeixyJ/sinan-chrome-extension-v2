@@ -1,21 +1,5 @@
 <script setup lang="ts">
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import Textarea from "@/components/ui/textarea/Textarea.vue";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { MultiSelect } from "@/components/ui/multi-select";
-import Tabs from "@/components/ui/tabs/Tabs.vue";
-import TabsList from "@/components/ui/tabs/TabsList.vue";
-import TabsTrigger from "@/components/ui/tabs/TabsTrigger.vue";
-import TabsContent from "@/components/ui/tabs/TabsContent.vue";
 import { useColorMode } from '@vueuse/core'
 import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
 import { StorageService } from '../../shared/services/storage'
@@ -23,9 +7,14 @@ import { SinanApiService } from '../../shared/services/api'
 import { BookmarkService } from '../../shared/services/bookmark'
 import { IconCacheService } from '../../shared/services/iconCache'
 import { NewtabBackgroundService } from '../../shared/services/tagBackground'
-import type { SnSpace, TagResp } from '../../shared/types/api'
-import ImageUpload from '@/components/ui/image-upload/ImageUpload.vue'
-import BlurSlider from '@/components/ui/blur-slider/BlurSlider.vue'
+import type { SnSpace, TagResp, NewSpace, NewTag } from '../../shared/types/api'
+import Tabs from "@/components/ui/tabs/Tabs.vue";
+import TabsList from "@/components/ui/tabs/TabsList.vue";
+import TabsTrigger from "@/components/ui/tabs/TabsTrigger.vue";
+import TabsContent from "@/components/ui/tabs/TabsContent.vue";
+import BasicFeaturesPage from './components/pages/BasicFeaturesPage.vue'
+import AddBookmarkPage from './components/pages/AddBookmarkPage.vue'
+import SettingsPage from './components/pages/SettingsPage.vue'
 
 const mode = useColorMode({
   modes: {
@@ -53,8 +42,12 @@ const syncAlert = ref<{ show: boolean; type: 'success' | 'error'; message: strin
 
 // 新增书签相关状态
 const isAddingBookmark = ref(false)
+const isAnalyzingWebsite = ref(false)
+const sseDescription = ref('')
 const namespaces = ref<SnSpace[]>([])
 const tags = ref<TagResp[]>([])
+const virtualSpaces = ref<SnSpace[]>([])
+const virtualTags = ref<TagResp[]>([])
 const currentTab = ref({
   title: '',
   url: '',
@@ -685,18 +678,58 @@ const addBookmarkToSinan = async () => {
   }
 
   isAddingBookmark.value = true
-  
+
   try {
+    // 检查是否选择了虚拟空间
+    let newSpace: NewSpace | undefined
+    let actualNamespaceId: string | undefined = currentTab.value.namespaceId
+
+    const selectedVirtualSpace = virtualSpaces.value.find(vs => vs.id === currentTab.value.namespaceId)
+    if (selectedVirtualSpace) {
+      newSpace = {
+        name: selectedVirtualSpace.name,
+        description: '',
+        icon: ''
+      }
+      actualNamespaceId = undefined // 虚拟空间不设置namespaceId
+    }
+
+    // 检查是否选择了虚拟标签
+    const newTags: NewTag[] = []
+    const actualTagIds: string[] = []
+
+    currentTab.value.tagIds.forEach(tagId => {
+      const virtualTag = virtualTags.value.find(vt => vt.id === tagId)
+      if (virtualTag) {
+        newTags.push({
+          name: virtualTag.name,
+          color: virtualTag.color,
+          description: ''
+        })
+      } else {
+        actualTagIds.push(tagId)
+      }
+    })
+
     const response = await SinanApiService.addBookmark({
       name: currentTab.value.title.trim(),
       url: currentTab.value.url.trim(),
       description: currentTab.value.description.trim() || undefined,
-      namespaceId: currentTab.value.namespaceId || undefined,
-      tagsIds: currentTab.value.tagIds.length > 0 ? currentTab.value.tagIds : undefined
+      namespaceId: actualNamespaceId || undefined,
+      tagsIds: actualTagIds.length > 0 ? actualTagIds : undefined,
+      newSpace: newSpace,
+      newTags: newTags.length > 0 ? newTags : undefined
     })
 
     if (response.code === 0) {
       console.log('书签添加成功:', response.data)
+
+      // 清空虚拟空间和标签
+      virtualSpaces.value = []
+      virtualTags.value = []
+
+      // 重新加载空间和标签数据
+      await Promise.all([loadNamespaces(), loadTags()])
 
       // 保存当前选择的空间和标签到缓存
       await StorageService.saveLastSelected(
@@ -734,6 +767,242 @@ const addBookmarkToSinan = async () => {
     }
   } finally {
     isAddingBookmark.value = false
+  }
+}
+
+// AI分析网站
+const analyzeWebsite = async () => {
+  if (!currentTab.value.url.trim()) {
+    addBookmarkAlert.value = {
+      show: true,
+      type: 'error',
+      message: '请先获取当前页面信息'
+    }
+    return
+  }
+
+  // 清空之前的SSE描述
+  sseDescription.value = ''
+
+  isAnalyzingWebsite.value = true
+
+  try {
+    const config = await StorageService.getConfig()
+    const serverUrl = config.serverUrl?.replace(/\/$/, '') || 'https://sinan.host/api'
+    const accessKey = config.apiKey
+
+    if (!accessKey) {
+      throw new Error('请先配置API密钥')
+    }
+
+    const analyzeUrl = `${serverUrl}/api/analyze-website?url=${encodeURIComponent(currentTab.value.url)}&accessKey=${encodeURIComponent(accessKey)}`
+
+    console.log('开始AI分析网站:', currentTab.value.url)
+
+    // 创建EventSource连接
+    const eventSource = new EventSource(analyzeUrl)
+
+    eventSource.addEventListener('status', (event) => {
+      console.log('AI分析状态:', event.data)
+      const basicInfo = JSON.parse(event.data)
+      if (basicInfo && typeof basicInfo === 'object') {
+        sseDescription.value = basicInfo.message || ''
+      }
+    })
+
+    eventSource.addEventListener('basic_info', (event) => {
+      console.log('AI分析基本信息:', event.data)
+
+      // 解析basic_info数据并显示message
+      try {
+        const basicInfo = JSON.parse(event.data)
+        if (basicInfo.message && typeof basicInfo.message === 'string') {
+          sseDescription.value = basicInfo.message
+        }
+      } catch (error) {
+        // 如果不是JSON格式，直接显示文本
+        if (event.data && typeof event.data === 'string') {
+          sseDescription.value = event.data
+        }
+      }
+    })
+
+    eventSource.addEventListener('result', (event) => {
+      try {
+        const result = JSON.parse(event.data)
+        console.log('AI分析结果:', result)
+
+        // 清空之前的虚拟空间和标签
+        virtualSpaces.value = []
+        virtualTags.value = []
+
+        // 处理返回的Spaces - 更新到空间选择中
+        if (result.data?.spaces) {
+          const spaceData = result.data.spaces
+
+          // 检查是否包含:new标记，如果是则创建虚拟空间
+          if (spaceData.includes(':new')) {
+            const virtualSpace: SnSpace = {
+              id: spaceData, // 使用完整字符串作为ID
+              userId: '',
+              name: spaceData,
+              pinyin: '',
+              abbreviation: '',
+              icon: '',
+              sort: 0,
+              share: false,
+              shareKey: '',
+              description: '',
+              createTime: new Date().toISOString(),
+              updateTime: new Date().toISOString(),
+              deleted: 0
+            }
+            virtualSpaces.value.push(virtualSpace)
+            currentTab.value.namespaceId = virtualSpace.id
+            console.log('AI推荐新空间:', spaceData)
+          } else {
+            // 查找已存在的空间
+            const matchedSpace = namespaces.value.find(ns =>
+              ns.name === spaceData || ns.id === spaceData
+            )
+
+            if (matchedSpace) {
+              currentTab.value.namespaceId = matchedSpace.id
+              console.log('AI推荐现有空间:', matchedSpace.name)
+            }
+          }
+        }
+
+        // 处理返回的Tags - 更新到标签选择中
+        if (result.data?.tags && Array.isArray(result.data.tags)) {
+          const recommendedTagIds: string[] = []
+
+          result.data.tags.forEach((tagStr: string) => {
+            // 解析标签格式，例如: "JSON工具:new:#4B0082"
+            const parts = tagStr.split(':')
+            const tagName = parts[0]
+            const isNew = parts[1] === 'new'
+            const color = parts[2] || '#6B7280'
+
+            if (isNew) {
+              // 创建虚拟标签
+              const virtualTag: TagResp = {
+                id: tagStr, // 使用完整字符串作为ID
+                name: tagName,
+                color: color,
+                sort: 0,
+                description: '',
+                createTime: new Date().toISOString(),
+                updateTime: new Date().toISOString()
+              }
+              virtualTags.value.push(virtualTag)
+              recommendedTagIds.push(virtualTag.id)
+              console.log('AI推荐新标签:', tagName, '颜色:', color)
+            } else {
+              // 查找已存在的标签
+              const matchedTag = tags.value.find(t =>
+                t.name === tagName || t.id === tagStr
+              )
+
+              if (matchedTag) {
+                recommendedTagIds.push(matchedTag.id)
+              }
+            }
+          })
+
+          if (recommendedTagIds.length > 0) {
+            // 更新标签选择，保留已有的标签并添加推荐的标签
+            const existingTagIds = [...currentTab.value.tagIds]
+            recommendedTagIds.forEach(tagId => {
+              if (!existingTagIds.includes(tagId)) {
+                existingTagIds.push(tagId)
+              }
+            })
+            currentTab.value.tagIds = existingTagIds
+
+            // 强制更新MultiSelect组件
+            multiSelectKey.value++
+
+            console.log('AI推荐标签ID:', recommendedTagIds)
+          }
+        }
+
+        // 如果有推荐的书签名称，更新标题
+        if (result.data?.name && typeof result.data.name === 'string') {
+          currentTab.value.title = result.data.name
+          console.log('AI推荐标题:', result.data.name)
+        }
+
+        // 如果有推荐的描述，更新描述
+        if (result.data?.description && typeof result.data.description === 'string') {
+          currentTab.value.description = result.data.description
+          console.log('AI推荐描述:', result.data.description)
+        }
+
+        // 使用SSE描述显示AI分析完成信息
+        if (result.data?.message && typeof result.data.message === 'string') {
+          sseDescription.value = result.data.message
+        } else {
+          sseDescription.value = 'AI分析完成！已为您推荐合适的空间和标签'
+        }
+
+        // 5秒后清空SSE描述
+        setTimeout(() => {
+          sseDescription.value = ''
+        }, 5000)
+
+      } catch (error) {
+        console.error('解析AI分析结果失败:', error)
+        addBookmarkAlert.value = {
+          show: true,
+          type: 'error',
+          message: 'AI分析结果解析失败'
+        }
+
+        // 清空SSE描述
+        sseDescription.value = ''
+      }
+
+      // 收到结果后关闭连接
+      eventSource.close()
+    })
+
+    eventSource.addEventListener('error', (event) => {
+      console.error('AI分析错误:', event)
+
+      addBookmarkAlert.value = {
+        show: true,
+        type: 'error',
+        message: 'AI分析失败，请稍后重试'
+      }
+
+      // 清空SSE描述
+      sseDescription.value = ''
+
+      eventSource.close()
+    })
+
+    // 设置超时
+    setTimeout(() => {
+      if (eventSource.readyState !== EventSource.CLOSED) {
+        eventSource.close()
+        addBookmarkAlert.value = {
+          show: true,
+          type: 'error',
+          message: 'AI分析超时，请稍后重试'
+        }
+      }
+    }, 30000) // 30秒超时
+
+  } catch (error) {
+    console.error('AI分析失败:', error)
+    addBookmarkAlert.value = {
+      show: true,
+      type: 'error',
+      message: `AI分析失败: ${error instanceof Error ? error.message : String(error)}`
+    }
+  } finally {
+    isAnalyzingWebsite.value = false
   }
 }
 
@@ -791,426 +1060,69 @@ const previewBingImage = async () => {
         </TabsList>
 
         <!-- 基础功能页面 -->
-        <TabsContent value="main" class="p-3 flex flex-col h-full space-y-4 overflow-y-auto">
-          <!-- 操作按钮 -->
-          <div class="flex flex-col gap-4">
-            <Button class="w-full" variant="default" @click="handleOpenSinan">打开Sinan主页</Button>
-            <div class="flex gap-2">
-              <Button
-                class="flex-1"
-                variant="outline"
-                @click="handleSync"
-                :disabled="isSyncing || isLoading || isDeleting"
-              >
-                {{ syncButtonText }}
-              </Button>
-              <Button
-                class="flex-1"
-                variant="destructive"
-                @click="handleDeleteBookmarks"
-                :disabled="isDeleting || isLoading || isSyncing"
-              >
-                {{ deleteButtonText }}
-              </Button>
-            </div>
-
-            <!-- 同步状态提示 -->
-            <Alert v-if="syncAlert.show" :variant="syncAlert.type === 'error' ? 'destructive' : 'default'">
-              <AlertDescription>
-                {{ syncAlert.message }}
-              </AlertDescription>
-            </Alert>
-          </div>
-
-          <div class="border-b border-border" />
-
-          <!-- 欢迎词配置 -->
-          <div class="space-y-4">
-            <div class="space-y-2">
-              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">欢迎词标题</label>
-              <Input
-                v-model="formValues.welcomeTitle"
-                placeholder="请输入欢迎词标题"
-                autocomplete="off"
-              />
-            </div>
-
-            <div class="space-y-2">
-              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">欢迎词内容</label>
-              <Input
-                v-model="formValues.welcomeSubtitle"
-                placeholder="请输入欢迎词内容"
-                autocomplete="off"
-              />
-            </div>
-
-            <div class="space-y-2">
-              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">默认搜索引擎</label>
-              <Select v-model="formValues.defaultSearchEngine">
-                <SelectTrigger class="w-full">
-                  <SelectValue placeholder="选择默认搜索引擎" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="baidu">百度</SelectItem>
-                  <SelectItem value="google">Google</SelectItem>
-                  <SelectItem value="bing">Bing</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <!-- 来源设置 -->
-          <div class="grid grid-cols-2 gap-4">
-            <!-- Newtab背景来源选择 -->
-            <div class="space-y-2">
-              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">背景来源</label>
-                <Select
-                  v-model="formValues.newtabBackgroundSource"
-                >
-                  <SelectTrigger class="w-full">
-                    <SelectValue placeholder="选择背景来源" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="blank">空</SelectItem>
-                    <SelectItem value="local">本地图片</SelectItem>
-                    <SelectItem value="urls">多个URL随机</SelectItem>
-                    <SelectItem value="bing">Bing每日一图</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <!-- 图标来源设置 -->
-              <div class="space-y-2">
-                <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">图标来源</label>
-                <Select
-                  v-model="formValues.iconSource"
-                >
-                  <SelectTrigger class="w-full">
-                    <SelectValue placeholder="选择图标来源" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="google-s2">Google S2</SelectItem>
-                    <SelectItem value="sinan">Sinan服务</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <!-- Newtab背景详细设置 -->
-            <div class="space-y-4">
-              <!-- 本地图片上传 -->
-              <div v-if="formValues.newtabBackgroundSource === 'local'" class="space-y-2">
-                <ImageUpload
-                  v-model="formValues.newtabBackgroundImage"
-                  label="上传背景图片"
-                />
-              </div>
-
-              <!-- 多个URL输入 -->
-              <div v-if="formValues.newtabBackgroundSource === 'urls'" class="space-y-2">
-                <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">背景图片URLs</label>
-                <Textarea
-                  v-model="urlTextarea"
-                  placeholder="每行输入一个图片URL，支持jpg、png、gif、webp格式&#10;例如：&#10;https://example.com/image1.jpg&#10;https://example.com/image2.png&#10;https://unsplash.com/photo/xxx"
-                  class="w-full resize-none min-h-[8rem] max-h-[12rem] overflow-y-auto"
-                  rows="6"
-                />
-                <div class="text-xs text-muted-foreground">
-                  有效URL数量: {{ validUrlCount }} / 总数: {{ totalUrlCount }}
-                </div>
-              </div>
-
-              <!-- Bing图片预览 -->
-              <div v-if="formValues.newtabBackgroundSource === 'bing'" class="space-y-2">
-                <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">Bing每日一图预览</label>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  @click="previewBingImage"
-                  :disabled="isLoadingBingImage"
-                  class="w-full"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                  {{ isLoadingBingImage ? '加载中...' : '预览今日Bing图片' }}
-                </Button>
-
-                <!-- Bing图片预览区域 -->
-                <div v-if="bingImageUrl" class="relative">
-                  <img
-                    :src="bingImageUrl"
-                    alt="Bing每日一图预览"
-                    class="w-full h-32 object-cover rounded-md border border-border"
-                  />
-                  <div class="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
-                    Bing每日一图
-                  </div>
-                </div>
-              </div>
-
-              <!-- 毛玻璃效果设置 -->
-              <div v-if="formValues.newtabBackgroundSource !== 'blank'" class="space-y-2">
-                <BlurSlider
-                  v-model="formValues.newtabBlurIntensity"
-                  label="毛玻璃力度"
-                  :min="0"
-                  :max="20"
-                  :step="1"
-                />
-              </div>
-            </div>
-
-                        <div class="space-y-2">
-              <div class="flex gap-2">
-                <Button 
-                  type="button" 
-                  class="flex-1" 
-                  :variant="hasChanges ? 'destructive' : 'default'"
-                  @click="onSubmit" 
-                  :disabled="isLoading || !hasChanges || isSaving"
-                >
-                  {{ saveButtonText }}
-                </Button>
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  @click="handleReset" 
-                  :disabled="isLoading || !hasChanges || isSaving"
-                  class="px-3"
-                >
-                  重置
-                </Button>
-              </div>
-              
-              <Button 
-                type="button" 
-                variant="secondary" 
-                @click="handleRestoreDefault" 
-                :disabled="isLoading || isSaving"
-                class="w-full"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2">
-                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                  <path d="M21 3v5h-5" />
-                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-                  <path d="M3 21v-5h5" />
-                </svg>
-                恢复默认配置
-              </Button>
-            </div>
-
-          <!-- 最后同步时间 -->
-          <div class="text-xs text-muted-foreground text-center">最后同步时间：{{ lastSyncText }}</div>
+        <TabsContent value="main" class="flex-1 overflow-hidden">
+          <BasicFeaturesPage
+            :form-values="formValues"
+            :has-changes="hasChanges"
+            :is-loading="isLoading"
+            :is-saving="isSaving"
+            :save-button-text="saveButtonText"
+            :last-sync-text="lastSyncText"
+            :is-syncing="isSyncing"
+            :sync-button-text="syncButtonText"
+            :is-deleting="isDeleting"
+            :delete-button-text="deleteButtonText"
+            :sync-alert="syncAlert"
+            :url-textarea="urlTextarea"
+            :total-url-count="totalUrlCount"
+            :valid-url-count="validUrlCount"
+            :bing-image-url="bingImageUrl"
+            :is-loading-bing-image="isLoadingBingImage"
+            @update:formValues="formValues = $event"
+            @update:urlTextarea="urlTextarea = $event"
+            @open-sinan="handleOpenSinan"
+            @sync="handleSync"
+            @delete-bookmarks="handleDeleteBookmarks"
+            @submit="onSubmit"
+            @reset="handleReset"
+            @restore-default="handleRestoreDefault"
+            @preview-bing-image="previewBingImage"
+          />
         </TabsContent>
 
         <!-- 添加书签页面 -->
-        <TabsContent value="bookmark" class="p-3 space-y-4 overflow-y-auto">
-          <div class="space-y-3">
-            <div>
-              <label class="text-sm font-medium mb-1 block">网址</label>
-              <Input 
-                v-model="currentTab.url" 
-                placeholder="https://example.com" 
-                class="w-full text-xs"
-                readonly
-              />
-            </div>
-            
-            <div>
-              <label class="text-sm font-medium mb-1 block">书签名称 *</label>
-              <Input 
-                v-model="currentTab.title" 
-                placeholder="输入书签名称" 
-                class="w-full"
-              />
-            </div>
-            
-            <div>
-              <label class="text-sm font-medium mb-1 block">描述</label>
-              <Textarea 
-                v-model="currentTab.description" 
-                placeholder="输入描述（可选）" 
-                class="w-full resize-none max-h-[4.5rem] overflow-y-auto"
-                rows="3"
-              />
-            </div>
-            
-            <div>
-              <label class="text-sm font-medium mb-1 block">选择空间</label>
-              <Select v-model="currentTab.namespaceId">
-                <SelectTrigger class="w-full">
-                  <SelectValue placeholder="选择一个空间" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem
-                    v-for="namespace in namespaces"
-                    :key="namespace.id"
-                    :value="namespace.id"
-                  >
-                    {{ namespace.name }}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <label class="text-sm font-medium mb-1 block">选择标签</label>
-              <MultiSelect
-                v-model="currentTab.tagIds"
-                :items="tags"
-                placeholder="选择标签（可多选）"
-                :key="multiSelectKey"
-              />
-            </div>
-          </div>
-          
-          <!-- 提示信息 -->
-          <Alert v-if="addBookmarkAlert.show" :variant="addBookmarkAlert.type === 'error' ? 'destructive' : 'default'">
-            <AlertDescription>
-              {{ addBookmarkAlert.message }}
-            </AlertDescription>
-          </Alert>
-          
-          <!-- 操作按钮 -->
-          <div class="flex gap-2">
-            <Button 
-              class="flex-1" 
-              variant="outline" 
-              @click="refreshCurrentTabInfo"
-              :disabled="isAddingBookmark"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2">
-                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                <path d="M21 3v5h-5" />
-                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-                <path d="M3 21v-5h5" />
-              </svg>
-              刷新页面信息
-            </Button>
-            <Button 
-              class="flex-1" 
-              @click="addBookmarkToSinan" 
-              :disabled="isAddingBookmark"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-              {{ isAddingBookmark ? '添加中...' : '添加书签' }}
-            </Button>
-          </div>
+        <TabsContent value="bookmark" class="flex-1 overflow-hidden">
+          <AddBookmarkPage
+            :current-tab="currentTab"
+            :namespaces="namespaces"
+            :tags="tags"
+            :virtual-spaces="virtualSpaces"
+            :virtual-tags="virtualTags"
+            :is-adding-bookmark="isAddingBookmark"
+            :is-analyzing-website="isAnalyzingWebsite"
+            :sse-description="sseDescription"
+            :add-bookmark-alert="addBookmarkAlert"
+            :multi-select-key="multiSelectKey"
+            @update:currentTab="currentTab = $event"
+            @refresh-current-tab-info="refreshCurrentTabInfo"
+            @add-bookmark="addBookmarkToSinan"
+            @analyze-website="analyzeWebsite"
+          />
         </TabsContent>
 
         <!-- 系统配置页面 -->
-        <TabsContent value="settings" class="p-3 space-y-4 overflow-y-auto">
-          <!-- 表单区域 -->
-          <div class="space-y-4">
-            <!-- 服务地址 -->
-            <div class="space-y-2">
-              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">服务地址</label>
-              <Input
-                v-model="formValues.webUrl"
-                placeholder="请输入服务地址"
-                autocomplete="off"
-              />
-            </div>
-
-            <!-- API接口地址 -->
-            <div class="space-y-2">
-              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">接口地址</label>
-              <Input
-                v-model="formValues.serverUrl"
-                placeholder="请输入API接口地址"
-                autocomplete="off"
-              />
-            </div>
-
-            <!-- 接口密钥 -->
-            <div class="space-y-2">
-              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">接口密钥</label>
-              <Input 
-                v-model="formValues.apiKey" 
-                type="password" 
-                placeholder="请输入接口密钥" 
-                autocomplete="off" 
-              />
-            </div>
-
-            <!-- 自动同步和同步间隔 -->
-            <div class="flex items-center justify-between gap-4">
-              <!-- Switch 开关自动同步书签 -->
-              <div class="flex items-center gap-2 space-y-0">
-                <label class="text-sm text-foreground font-medium">自动同步</label>
-                <Switch
-                  v-model="formValues.autoSync"
-                />
-              </div>
-
-              <!-- 同步间隔时间 -->
-              <div class="flex items-center gap-2 space-y-0">
-                <label class="text-sm text-foreground font-medium">间隔</label>
-                <Select
-                  v-model="formValues.syncInterval"
-                >
-                  <SelectTrigger class="w-20">
-                    <SelectValue placeholder="选择" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">1</SelectItem>
-                    <SelectItem value="5">5</SelectItem>
-                    <SelectItem value="10">10</SelectItem>
-                    <SelectItem value="15">15</SelectItem>
-                    <SelectItem value="30">30</SelectItem>
-                  </SelectContent>
-                </Select>
-                <span class="text-xs text-muted-foreground">分钟</span>
-              </div>
-            </div>
-
-            <div class="space-y-2">
-              <div class="flex gap-2">
-                <Button 
-                  type="button" 
-                  class="flex-1" 
-                  :variant="hasChanges ? 'destructive' : 'default'"
-                  @click="onSubmit" 
-                  :disabled="isLoading || !hasChanges || isSaving"
-                >
-                  {{ saveButtonText }}
-                </Button>
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  @click="handleReset" 
-                  :disabled="isLoading || !hasChanges || isSaving"
-                  class="px-3"
-                >
-                  重置
-                </Button>
-              </div>
-              
-              <Button 
-                type="button" 
-                variant="secondary" 
-                @click="handleRestoreDefault" 
-                :disabled="isLoading || isSaving"
-                class="w-full"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2">
-                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                  <path d="M21 3v5h-5" />
-                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-                  <path d="M3 21v-5h5" />
-                </svg>
-                恢复默认配置
-              </Button>
-            </div>
-          </div>
+        <TabsContent value="settings" class="flex-1 overflow-hidden">
+          <SettingsPage
+            :form-values="formValues"
+            :has-changes="hasChanges"
+            :is-loading="isLoading"
+            :is-saving="isSaving"
+            :save-button-text="saveButtonText"
+            @update:formValues="formValues = $event"
+            @submit="onSubmit"
+            @reset="handleReset"
+            @restore-default="handleRestoreDefault"
+          />
         </TabsContent>
       </Tabs>
     </div>

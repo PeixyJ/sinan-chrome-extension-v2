@@ -27,12 +27,26 @@ export interface BookmarkTreeResp {
   bookmarks: BookmarkResp[];
 }
 
+export interface NewSpace {
+  name: string;
+  description?: string;
+  icon?: string;
+}
+
+export interface NewTag {
+  name: string;
+  color: string;
+  description?: string;
+}
+
 export interface AddBookmarkReq {
   name: string;
   url: string;
   description?: string;
   namespaceId?: string;
   tagsIds?: string[];
+  newSpace?: NewSpace;
+  newTags?: NewTag[];
 }
 
 export interface ApiResult<T> {

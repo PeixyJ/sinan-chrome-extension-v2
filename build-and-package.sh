@@ -21,6 +21,40 @@ if [ ! -f "package.json" ]; then
     exit 1
 fi
 
+# 自动递增版本号
+echo "📝 自动递增版本号..."
+MANIFEST_FILE="src/manifest.json"
+
+if [ ! -f "$MANIFEST_FILE" ]; then
+    echo "❌ 错误: 未找到 $MANIFEST_FILE 文件"
+    exit 1
+fi
+
+# 获取当前版本号
+CURRENT_VERSION=$(grep '"version":' "$MANIFEST_FILE" | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+
+if [ -z "$CURRENT_VERSION" ]; then
+    echo "❌ 错误: 无法从 $MANIFEST_FILE 获取版本号"
+    exit 1
+fi
+
+echo "📍 当前版本: v$CURRENT_VERSION"
+
+# 递增版本号 (支持语义化版本号，如 1.3.3 -> 1.3.4)
+# 使用 awk 来分割版本号并递增最后一位
+NEW_VERSION=$(echo "$CURRENT_VERSION" | awk -F. '{print $1"."$2"."$3+1}')
+
+# 更新 manifest.json 中的版本号
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS 使用 sed -i ''
+    sed -i '' "s/\"version\": *\"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" "$MANIFEST_FILE"
+else
+    # Linux 使用 sed -i
+    sed -i "s/\"version\": *\"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" "$MANIFEST_FILE"
+fi
+
+echo "🔝 版本已更新至: v$NEW_VERSION"
+
 # 清理旧的构建文件
 if [ -d "dist" ]; then
     echo "🧹 清理旧的构建文件..."
@@ -37,13 +71,8 @@ if [ ! -d "dist" ]; then
     exit 1
 fi
 
-# 从manifest.json中获取版本号
-VERSION=$(grep '"version":' src/manifest.json | sed 's/.*"version": *"\([^"]*\)".*/\1/')
-
-if [ -z "$VERSION" ]; then
-    echo "❌ 错误: 无法从 src/manifest.json 获取版本号"
-    exit 1
-fi
+# 使用已更新的版本号
+VERSION="$NEW_VERSION"
 
 # 生成包名（包含日期和版本号）
 DATE=$(date +"%Y%m%d")
