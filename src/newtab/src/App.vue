@@ -1457,7 +1457,7 @@ watch(filteredBookmarks, () => {
     <!-- 搜索框 -->
     <div class="mb-8 max-w-md mx-auto relative">
       <div class="bg-white/20 dark:bg-black/30 backdrop-blur-lg rounded-2xl p-1 shadow-xl border border-white/30 dark:border-white/20">
-        <Input v-model="searchQuery" placeholder="搜索书签名称、网址、描述或标签..."
+        <Input v-model="searchQuery" placeholder="搜索书签名称、网址、描述..."
                class="w-full bg-white/80 dark:bg-black/60 border-0 rounded-xl shadow-none backdrop-blur-sm
                       placeholder:text-gray-600 dark:placeholder:text-gray-300
                       text-gray-900 dark:text-white
