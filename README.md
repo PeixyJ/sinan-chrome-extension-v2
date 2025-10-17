@@ -2,6 +2,30 @@
 
 一个功能强大的 Chrome 书签同步与管理扩展，提供智能搜索、个性化新标签页、暗黑模式和云端同步功能。
 
+## 快速安装
+
+## 商店安装
+
+1. 打开 Chrome 浏览器，进入 [Chrome 网上应用店](https://chrome.google.com/webstore/category/extensions)
+2. 在搜索栏输入 "Sinan" 并搜索
+3. 找到 Sinan 插件，点击“添加至 Chrome”按钮
+4. 在弹出的对话框中，点击“添加扩展程序”按钮
+5. 安装完成后，插件图标会出现在浏览器的工具栏中
+
+![alt text](<CleanShot 2025-10-17 at 13.25.11@2x.png>)
+
+## 手动安装插件
+
+1. 进入 https://github.com/PeixyJ/sinan-chrome-extension-v2 
+2. 找到 Releases
+3. 下载最新版本的压缩包并解压
+4. 打开 Chrome 浏览器，输入 chrome://extensions/ 进入扩展管理页面
+5. 开启右上角的开发者模式
+6. 点击“加载已解压的扩展程序”，选择解压后的文件夹
+7. 完成安装
+
+![alt text](<CleanShot 2025-09-04 at 10.06.52@2x.png>)
+
 ## ✨ 核心功能
 
 ### 🔍 Omnibox 快速搜索
